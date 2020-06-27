@@ -1,0 +1,94 @@
+---
+title: "Predicting type of exercise using data from accelerometers"
+author: "Nicolas Lara Torres"
+date: "26 de junio de 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Libraries
+library(ggplot2)
+library(readr)
+library(caret)
+library(parallel)
+library(doParallel)
+library(gbm)
+```
+
+## Overview
+
+The purpose of this document is to present and explain a predictive model based on machine learning, which aims to predict the way in which participants perform barbell lifts. The model is trained in a training data and then applied to 20 test casesto evaluate its prediction capacity.
+
+## Cleaning and Exploring Data
+
+After loading the data, it is verified that they are balanced in the number of observations according to the variable "classe", "user_name" and the combination of both.
+
+```{r, message=FALSE, warning=FALSE}
+PM_train0<-read_csv("./Data/pml-training-courseproject.csv")
+t<-table(PM_train0$user_name,PM_train0$classe)
+prop.table(table(PM_train0$classe)) ;prop.table(table(PM_train0$user_name))
+prop.table(t,1)
+```
+
+The first 7 columns are removed from the data, because they do not correspond to accelerometer data, also as part of the data exploration, it reported variable with a high number of missing values, the following code identifies these variables and then it removes them from the data, in total there are 100 columns that are removed, leaving a total of 53 variables (outcome plus 52 predictores). In the following code, the variables with more than 95% of their missing values are removed, other values such as 80% was tested, obtaining the same results.
+
+```{r}
+PM_train<-PM_train0[,c(8:160)]
+nobs<-dim(PM_train)[1]
+cols<-rep(0,dim(PM_train)[2])
+for(i in 1:dim(PM_train)[2]){
+    aux<-is.na(PM_train[,i])
+    porc<-sum(aux)/nobs
+    if (porc>=0.95){
+        cols[i]<-i
+    }
+}
+cols<-cols[which(cols!=0)] #total of 100 variables
+PM_train<-PM_train[,-cols]
+```
+
+Finally, it is identified that many of the variables are skewed, the following graph shows the example of the variable "roll_belt", which has a "double bell" one of them centered at 0, there are a lot of variables far from a gaussian distribution. This makes us rule out the use of models based on linear regression.
+
+```{r}
+h<-ggplot(PM_train, aes(roll_belt))
+h+geom_histogram()
+```
+
+## Model Construction
+
+4 types of models were developed, the first was prediiction with trees, which had a very low level of accuracy (~40%) and was discarded. The second was a LDA model obtaining better results (accuracy of ~70%), to then develop a random forest model, which had a total precision, that is, 100%, and finally a boosting with trees (gbm) model was developed which had an accuracy of 97%. In short, the decision was made to use the random forest model for having the highest accuracy.
+
+```{r, cache=TRUE}
+PM_train$classe<-as.factor(PM_train$classe)
+
+cluster<-makeCluster(detectCores()-1)
+registerDoParallel(cluster)
+fitcontrol<-trainControl(method="cv", number=5, allowParallel=TRUE)
+set.seed(334)
+system.time(fit3<-train(classe~., data=PM_train, method="rf", trControl=fitcontrol))
+stopCluster(cluster)
+registerDoSEQ()
+cm3<-confusionMatrix(PM_train$classe,predict(fit3,PM_train))
+```
+
+In this regard, note in the code that the computer cores were used simultaneously to estimate the model via the "train" function, this in order to reduce the delay time. In addition, it should be noted that cross-validation was used as the estimation control method, using 5 K-folds to divide the data, 5 were chosen to balance the control of bias and variance, although the number itself is arbitrary. Note that cross-validation was used to control the estimation of the different trees and predictions used carried out by the random forest method.
+
+Note that the random forest method was chosen for its accuracy, which can be seen in the following plot, where a 100% accuracy is seen with mtry=2.
+
+```{r}
+plot(fit3)
+```
+
+## Evaluation and Results
+
+The model was applied to the test data using the following code:
+
+```{r, message=FALSE, warning=FALSE}
+PM_test0<-read_csv("./Data/pml-testing-courseproject.csv")
+PM_test<-PM_test0[,c(8:160)]
+PM_test<-PM_test[,-cols]
+pred<-predict(fit3, newdata = PM_test[,-53])
+```
+
+Thus, by answering the course quiz, 100% accuracy was obtained in predicting the "class" variable. About the out of sample error, theoretically it corresponds to 0% (1-accuracy), although it is possible that in front of a greater number of observations in the test data we would obtain a number greater than zero of errors.
